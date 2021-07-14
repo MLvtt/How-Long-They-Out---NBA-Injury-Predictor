@@ -30,5 +30,5 @@ for ltr in letters:
                              'birth_date': birthdate, 'colleges': colleges})
 
 
-with open('/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/ideas/nba_injuries/all_player_bbref_info.json', 'w') as outfile:
+with open('../data/all_player_bbref_info.json', 'w') as outfile:
     json.dump(players_info, outfile)

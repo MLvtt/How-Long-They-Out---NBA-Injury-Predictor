@@ -10,10 +10,10 @@ mongo_gamelogs = db.gamelogs
 def pickle_inj_df(raw=0):
     df = get_df(raw)
     df = set_df_date(df)
-    df.to_pickle(f'./df{raw}.pkl')
+    df.to_pickle(f'../data/df{raw}.pkl')
     print('done')
 
-df = pd.read_pickle('./df.pkl')
+df = pd.read_pickle('../data/df.pkl')
 
 # print(df)
 

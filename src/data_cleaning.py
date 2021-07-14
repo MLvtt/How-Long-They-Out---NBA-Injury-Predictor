@@ -4,7 +4,7 @@ from unidecode import unidecode
 import re, requests
 from bs4 import BeautifulSoup
 
-def bbref_id_df(json_loc='/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/ideas/nba_injuries/all_player_bbref_info.json'):
+def bbref_id_df(json_loc='../data/all_player_bbref_info.json'):
     df_bbref_id = pd.read_json(json_loc)
     df_bbref_id['birth_date'] = pd.to_datetime(df_bbref_id['birth_date'])
     df_bbref_id['player_format'] = df_bbref_id['player'].apply(unidecode)
@@ -13,7 +13,7 @@ def bbref_id_df(json_loc='/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/id
     df_bbref_id['player_format'] = df_bbref_id['player_format'].str.replace('.', '', regex=False)
     return df_bbref_id
 
-def injuries_df(json_loc='/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/ideas/nba_injuries/pst_nba_injuries_all.json'):
+def injuries_df(json_loc='../data/pst_nba_injuries_all.json'):
     df_injuries_raw = pd.read_json(json_loc)
     df_injuries_raw.at[0, 'Date'] = pd.Timestamp('2019-12-30 00:00:00')
     df_injuries_raw = df_injuries_raw.sort_values('Date').reset_index(drop=True)

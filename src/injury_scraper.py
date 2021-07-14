@@ -29,5 +29,5 @@ for i in range(total_pages):
         new_row['Notes'] = columns[4].text.strip()
         all_rows.append(new_row)  
     print(f"Page {page} scraped")
-with open('/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/ideas/nba_injuries/pst_nba_injuries_all.json', 'w') as outfile:
+with open('../data/pst_nba_injuries_all.json', 'w') as outfile:
     json.dump(all_rows, outfile)
