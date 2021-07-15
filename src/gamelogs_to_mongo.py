@@ -1,4 +1,4 @@
-from re import I
+import re
 from data_cleaning import *
 from bbref_gamelogs import BBRefScraper
 from pymongo import MongoClient
@@ -13,7 +13,7 @@ def pickle_inj_df(raw=0):
     df.to_pickle(f'../data/df{raw}.pkl')
     print('done')
 
-df = pd.read_pickle('../data/df.pkl')
+df = pd.read_pickle('/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/How_Long_They_Out-NBA_Injury_Predictor/data/df1.pkl')
 
 # print(df)
 
@@ -151,30 +151,29 @@ def format_injury_df(df):
     return df
 
 
-def get_return_dates(df):
-    players = df['bbref_id'].unique() ### BBRef_ID for each player array
-    return_date_df = pd.DataFrame() ### Empty DF for collecting return dates and indices
-    cntr = 0 ### Counter
-    return_date_dict = {}
 
+def get_return_dates(df):
+    df_inj = df[df['Status'].eq('Injured')].copy()
+    players = df_inj['bbref_id'].unique()[:1100] ### BBRef_ID for each player array
+    return_date_df = pd.DataFrame() ### Empty DF for collecting return dates and indices
+    return_date_dict = {}
     for player in players:
-        # print(player)
+        cntr = 0 ### Counter    
         player_df = df[df['bbref_id'] == player] ### Get player injury df slice
-        # print(player_df)
         
         ### Get player gamelogs and create gamelogs_df
         player_gamelogs = mongo_gamelogs.find_one({'bbref_id': player})['gamelogs']
         gamelogs_df = pd.DataFrame(player_gamelogs).dropna(subset=['MP'])
-        # print(gamelogs_df)
 
-        return_dates = [] ### Empty list for collecting return dates for player
+        # prev_inj = None
+        # prev_inj_date = pd.NaT
         prev_return_date = pd.NaT ### Set nan val for initial previous return date
-
+        init_inj_info = ''
         for idx in player_df.index: ### Loop through each injury record
             date, injury = player_df['Date'][idx], player_df['Notes'][idx] ### injury date and injury notes
+            status = player_df['Status'][idx]
             from_szn, to_szn = player_df['from'][idx], player_df['to'][idx] ### player career
             season = get_season_column(date) ### season of injury
-            # print(idx, player, season, injury)
             nba_career = 0 ### Injury occured during career
             out_of_league = 0 ### Flag for player being out of league season following injury
             if from_szn > season:
@@ -184,21 +183,22 @@ def get_return_dates(df):
                 # print('post-career')
                 out_of_league = 1
                 nba_career = 1 ### Post-Career, injury occured
+            season_ending = 0
             try: ### Find next game player played post injury
-                return_date = pd.Timestamp(gamelogs_df[gamelogs_df['Date'] > date]['Date'].values[0])
+                return_date =  min(pd.Timestamp(gamelogs_df[gamelogs_df['Date'] > date]['Date'].values[0]),
+                                pd.Timestamp(player_df[player_df['Status'].eq('Healed')&(player_df['Date'] >= date)]['Date'].values[0]))
                 return_season = get_season_column(return_date)
                 seasons_out = return_season - season
-                if seasons_out == 1:
-                    # print("!"*3)
-                    pass
+                if seasons_out == 1:## Season ending?
+                    return_game = gamelogs_df[gamelogs_df['Date'] > date]['Rk'].values[0]
+                    if return_game < 11:
+                        season_ending = 1
                 elif seasons_out > 1:
                     if nba_career == 0:
-                        # print(' ! '*5)
-                        # print(idx, player, (from_szn, to_szn), injury, season, return_season, date.date(), return_date.date())
-                        gamelogs_df_no_drop = pd.DataFrame(player_gamelogs)
+                        gamelogs_df_no_drop = pd.DataFrame(player_gamelogs) ## gamelogs without dropping missed games/season
                         for szn in range(season+1, return_season): ### Loop thru missed seasons
-                            szn_glog = gamelogs_df_no_drop[gamelogs_df_no_drop['Season'] == szn]
-                            reason = szn_glog['G'].values[0]
+                            szn_glog = gamelogs_df_no_drop[gamelogs_df_no_drop['Season'] == szn] ## missed season gamelog
+                            reason = szn_glog['G'].values[0] ### season missed reason
                             if any(x in reason.lower() for x in ['injury', 'illness', 'waived']):
                                 # print(reason)
                                 pass
@@ -213,27 +213,19 @@ def get_return_dates(df):
                                 out_of_league = 1
                             elif ('other' in reason.lower()) or ('baseball' in reason.lower()): ### Keeping baseball even though jordan wasn't out injured
                                 ### COULD LOOK UP GAMELOGS FROM OTHER LEAGUES???????????? Not worth it right now 
-                                return_date = szn_glog['Date'].values[0] ############## OR SHOULD IT BE pd.NaT # No because they played after
-                                # print(player,'new return date', str(return_date)[:10], '* '*10)
+                                return_date = pd.NaT#szn_glog['Date'].values[0] 
                                 out_of_league = 1
                                 break
                             elif len(szn_glog) > 1: ## Pulling Players with season with inactive for whole gamelog
                                 pass
-                            # elif 'Did Not Play - (Not in NBA)' == reason: #### TEMPORARY to see whatelse left
-                                pass
                             else: ### Gonna just handle all out_of_league as out of league instead of date
-                                # print(idx, player, (from_szn, to_szn), injury, season, return_season, date.date(), return_date.date())
-                                # print(szn_glog[['G', 'Date', 'Season']].values)
-                                return_date = szn_glog['Date'].values[0] ############## OR SHOULD IT BE pd.NaT # No because they played after
-                                # print(player, 'new return date', str(return_date)[:10])
-                                # print()
+                                return_date = pd.NaT #szn_glog['Date'].values[0] 
                                 out_of_league = 1
                                 break 
-                            # szn_glog['G'].values[0]
-                    else:
-                        # print(player, szn, nba_career) ### FIGURE THIS OUT
-                        pass
-                            # print()#[['Season','G']])
+                    # else:
+                    #     # print(player, szn, nba_career) ### FIGURE THIS OUT
+                    #     pass
+                    #         # print()#[['Season','G']])
                 elif seasons_out < 0:
                     print('WTF '*50)
                 # print(season, return_season)
@@ -243,27 +235,53 @@ def get_return_dates(df):
                     out_of_league = 1
                 else:
                     out_of_league = 0
-                # print(player, date.date())
-                # if player_df[player_df['bbref_id'] == player]['to'].values[0] == date.year:
-                #     # print(player, date.date(), 'End of NBA Career')
-                #     pass
-                # else:
-                #     print(player, date.date(), '!!!!!!!')
                 return_date = pd.NaT
                 return_season = pd.NaT
-            
             if return_date == prev_return_date: ### Check to see if status update (aka not new injury)
                 cntr += 1
                 # print(cntr, player, injury, date.date(), return_date.date())
                 new_inj = 0
+                info_gap_days = (date-init_inj_date).days
+                
+                if re.fullmatch(r'(^pla.*?n I\w$)', init_inj_info) and \
+                    (not re.fullmatch(r'(^pla.*?n I\w$)', injury)) and \
+                    (status == 'Injured') and (info_gap_days < 6):
+                    inj_update = re.sub(r'(^pla.*?n I\w)|( \(.*?\))', '', injury)
+                    if (inj_update != '') and (not updated_init_inj):
+                        if inj_update[0] != ' ':
+                            inj_update = ' ' + inj_update
+                        # print()
+                        # print(player, init_inj_info, str(init_inj_date)[:10], '\t', info_gap_days)
+                        # print('-> ',idx, player, (str(date)[:10], str(return_date)[:10]), injury)
+
+                        return_date_dict[init_inj_idx]['Inj_Check'] += inj_update
+                        updated_init_inj = True
+
                 # print("!!!")
                 # INJURY NOTES HANDLE HERE
             else:
                 new_inj = 1
+                init_inj_idx = idx
+                init_inj_info = injury
+                init_inj_date = date
+                updated_init_inj = False
+                if re.fullmatch(r'(pla.*?n I\w$)', init_inj_info):
+                    # print()
+                    pass
+                    # print('!!!', prev_inj, str(prev_inj_date)[:10], str(prev_return_date)[:10])
+                    # print(idx, player, (str(date)[:10], str(return_date)[:10]), injury)
+            ### GAME STATS
+            ## Game before injury
+            # gamelogs_df[gamelogs_df['Date'] <= date][***STAT***].
+            ## 7 days before injury
+            ## 14 days before injury
+            ## 30 days before injury
+            ## Season up to that point
+            ## Career
             inj_duration = return_date - date
-            return_date_dict[idx] = {'Return_Date': return_date, 'Inj_Duration': inj_duration, 'New_Inj': new_inj, 'Out_of_NBA': out_of_league, 'Career': nba_career}
-            return_dates.append(return_date) ### Add return date to player return date list
+            return_date_dict[idx] = {'Return_Date': return_date, 'Inj_Duration': inj_duration, 'New_Inj': new_inj, 'Out_of_NBA': out_of_league, 'Season_Ending':season_ending, 'Career': nba_career, 'Inj_Check':injury}
             prev_return_date = return_date ### Set new prev_return_date for next item in loop
+
 
     return_date_df = pd.DataFrame(return_date_dict).T.sort_index()
     return return_date_df
@@ -289,7 +307,11 @@ if __name__ == '__main__':
     # print(pd.DataFrame(format_gamelogs_from_mongo(bbrid)))
     # formatted_gamelogs_to_mongo()
     # pickle_inj_df(1)
-    print(format_injury_df(df))
+    # print('1 done df0 now')
+    # pickle_inj_df(0)
+    print(get_return_dates(df))
+    # get_return_dates(df)
+    # print(format_injury_df(df))
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
     # print(format_injury_df(df))
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
