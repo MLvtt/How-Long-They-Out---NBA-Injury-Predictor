@@ -1,7 +1,13 @@
 import re
-from data_cleaning import *
+from data_cleaning import get_df, set_df_date, bbref_id_df
 from bbref_gamelogs import BBRefScraper
 from pymongo import MongoClient
+import pandas as pd
+import numpy as np
+import string
+from nltk.tokenize import word_tokenize
+from nltk.stem.porter import PorterStemmer
+from nltk.stem.wordnet import WordNetLemmatizer
 
 client = MongoClient('localhost', 27017)
 db = client.nba_inj
@@ -10,10 +16,11 @@ mongo_gamelogs = db.gamelogs
 def pickle_inj_df(raw=0):
     df = get_df(raw)
     df = set_df_date(df)
-    df.to_pickle(f'../data/df{raw}.pkl')
+    df.to_pickle('../data/df.pkl')
+    # df.to_pickle(f'../data/df{raw}.pkl')
     print('done')
 
-df = pd.read_pickle('/Users/mbun/Code/dsi_galvanize/capstones/capstone_2/How_Long_They_Out-NBA_Injury_Predictor/data/df1.pkl')
+df = pd.read_pickle('../data/df1.pkl')
 
 # print(df)
 
@@ -130,8 +137,18 @@ def format_injury_df(df):
     ### Add Season Column
     df['Season'] = df['Date'].apply(lambda x: get_season_column(x))
     ### Generate return dates df and join to injury df
-    return_dates_df = get_return_dates(df)
+    # return_dates_df = get_return_dates(df)
+    return_dates_df = pd.read_pickle('../data/df_return.pkl')
     df = df.join(return_dates_df)
+    ## Comine Modern Team Names (Cannonical)
+    df.loc[(df['Team'] == 'Sonics') | (df['Team'] == 'Thunder'), 'Team'] = 'Sonics/Thunder'
+    df.loc[(df['Team'] == 'Wizards') | (df['Team'] == 'Bullets'), 'Team'] = 'Bullets/Wizards'
+    df.loc[((df['Team'] == 'Hornets') & (df['Date'] < '2013-08-01')) | (df['Team'] == 'Pelicans'), 'Team'] = 'Hornets/Pelicans'
+    df.loc[((df['Team'] == 'Hornets') & (df['Date'] >= '2013-08-01')) | (df['Team'] == 'Bobcats'), 'Team'] = 'Bobcats/Hornets'
+    ### Only Injuries
+    df = df[df.Status.eq('Injured')]
+    ### Update Notes col
+    df['Notes'] = df['Inj_Check']
     ### Convert Age to year with 2 decimal places
     df['age'] = round(df['age'] / np.timedelta64(1, "Y"), 2)
     ### Height from feet-inches to inches
@@ -141,23 +158,444 @@ def format_injury_df(df):
     ### Set Players who are out of the league following injury to NaT 
     df.loc[df['Out_of_NBA'] == True, ['Return_Date','Inj_Duration']] = pd.NaT ### DO I WANT NAT or something else?????
     ### Convert weight and New Injury/Out of NBA/Career Statuses to int
-    df[['weight', 'New_Inj', 'Out_of_NBA', 'Career']] = df[['weight', 'New_Inj', 'Out_of_NBA', 'Career']].astype(int)
+    df[['weight', 'New_Inj', 'Out_of_NBA', 'Season_Ending', 'Career']] = df[['weight', 'New_Inj', 'Out_of_NBA', 'Season_Ending', 'Career']].astype(int)
     ### League Year where rookie year = year 0
     df['League_Years'] = df['Season'] - df['from']
     ### Count of Instances of New injuries by player for career
     df['Num_Inj_Career'] = df.groupby('bbref_id')['New_Inj'].cumsum()
     ### Count of Instances of New injuries by player for season
     df['Num_Inj_Season'] = df.groupby(['bbref_id', 'Season'])['New_Inj'].cumsum()
+    ### Split POS to Dummies
+    for pos in ['G', 'F', 'C']:
+        df['POS_'+pos] = df['pos'].str.contains(pos).astype(int)
+
+    def injury_duration_categories(x):
+        if x[1] == 1:
+            return 'Out Of NBA'
+        elif x[2] == 1:
+            return 'Season Ending'
+        elif x[0].days < 7:
+            return 'Days'
+        elif x[0].days < 14:
+            return 'Week'
+        elif x[0].days < 60:
+            return 'Weeks'
+        elif x[0].days < 365:
+            return 'Months'
+        else:
+            return 'More than a year'
+    df['Inj_Duration_Cat'] = df[['Inj_Duration', 'Out_of_NBA', 'Season_Ending']].apply(lambda x: injury_duration_categories(x), axis=1).unique()
+    ### Drop Columns
+    df.drop(['pos','Inj_Check'], axis=1, inplace=True)
+    df = injury_categorization(df)
     return df
 
+def injury_categorization(df):
+    df = df[(df['Date'] >= '1994-07-01')&df['New_Inj']]
 
+    notes = df.Notes.apply(lambda x: re.sub('/', ' ', x))
+    
+    tokens = notes.apply(lambda x: word_tokenize(x.lower()))
+
+    stopwords_ = "a,able,about,across,after,all,almost,also,am,among,an,and,any,\
+    are,as,at,be,because,been,but,by,can,could,dear,did,do,does,either,\
+    else,ever,every,for,from,get,got,had,has,have,he,her,hers,him,his,\
+    how,however,i,if,in,into,is,it,its,just,least,let,like,likely,may,\
+    me,might,most,must,my,neither,no,of,off,often,on,only,or,other,our,\
+    own,rather,said,say,says,she,should,since,so,some,than,that,the,their,\
+    them,then,there,these,they,this,tis,to,too,twas,us,wants,was,we,were,\
+    what,when,where,which,while,who,whom,why,will,with,would,yet,you,your".split(',')
+    stopwords_ += ['dnp', 'dtd', 'day-to-day', 'out', 'day', 'season', 'week', 'weeks', 'month', 'months', 'approximate', 'approximately' 'indefinitely', 'placed']
+    
+    punctuation_ = set(string.punctuation)
+    
+    def filter_tokens(sent):
+        return([w for w in sent if not w in stopwords_ and not w in punctuation_ and not w[0].isnumeric() and (not w[-1].isnumeric() or w == 'covid-19')])
+    
+    tokens_filtered = tokens.apply(lambda x: filter_tokens(x))
+    
+    stemmer_porter, lemmatizer = PorterStemmer(), WordNetLemmatizer()
+
+    tokens_lemm_stem = tokens_filtered.apply(lambda x: [stemmer_porter.stem(lemmatizer.lemmatize(w)) for w in x])
+
+    df_inj_filtered = df.loc[tokens_lemm_stem.apply(lambda x: 
+                                                    # ('muscl' in x) and not 
+                                                    (
+                                                    ## Sick
+                                                    ('ill' in x) or 
+                                                    ('flu' in x) or 
+                                                    ('flu-lik' in x) or 
+                                                    ('viru' in x) or 
+                                                    ('viral' in x) or 
+                                                    ('covid-19' in x) or 
+                                                    ('protocol' in x) or 
+                                                    ('strep' in x) or 
+                                                    ('cold' in x) or
+                                                    ('bronchiti' in x) or 
+                                                    ('gastroenter' in x) or 
+                                                    ('respiratori' in x) or 
+                                                    ('poison' in x) or 
+                                                    
+                                                    ## Rest
+                                                    ('rest' in x) or 
+
+
+                                                    ## Head
+                                                    ('headach' in x) or 
+                                                    ('migrain' in x) or 
+                                                    ('concuss' in x) or 
+                                                    ('facial' in x) or 
+                                                    ('jaw' in x) or 
+                                                    ('throat' in x) or 
+                                                    ('head' in x) or 
+                                                    ('mouth' in x) or  
+                                                    ('oral' in x) or  
+                                                    ('tooth' in x) or 
+                                                    ('teeth' in x) or 
+                                                    ('dental' in x) or 
+                                                    ('nose' in x) or 
+                                                    ('sinu' in x) or 
+                                                    ('eye' in x) or 
+                                                    ('ear' in x) or 
+                                                    ('eardrum' in x) or 
+                                                    
+                                                    ## Spine
+                                                    ('neck' in x) or 
+                                                    ('collarbon' in x) or 
+                                                    ('spine' in x) or 
+                                                    ('spinal' in x) or 
+                                                    ('lumbar' in x) or 
+                                                    ('disc' in x) or 
+                                                    ('disk' in x) or 
+                                                    ('tailbon' in x) or 
+                                                    ('back' in x) or 
+                                                    
+
+                                                    ## Shoulder
+                                                    ('shoulder' in x) or 
+                                                    ('cuff' in x) or 
+                                                    ('quadricep' in x) or 
+                                                    ('bicep' in x) or 
+                                                    ('labrum' in x) or
+
+                                                    ## Arm
+                                                    ('arm' in x) or 
+                                                    ('forearm' in x) or 
+                                                    ('elbow' in x) or
+
+                                                    ## Hand
+                                                    ('wrist' in x) or 
+                                                    ('thumb' in x) or 
+                                                    ('hand' in x) or 
+                                                    ('finger' in x) or 
+
+                                                    ## Chest
+                                                    ('pector' in x) or 
+                                                    ('abdomin' in x) or 
+                                                    ('chest' in x) or 
+                                                    ('rib' in x) or 
+                                                    ('obliqu' in x) or
+                                                    ('appendectomi' in x) or
+                                                    
+                                                    ## Heart
+                                                    ('heart' in x) or 
+                                                    ('heartbeat' in x) or 
+                                                    
+                                                    ## Midsection
+                                                    ('adductor' in x) or 
+                                                    ('abductor' in x) or 
+                                                    ('pelvi' in x) or 
+                                                    ('hip' in x) or 
+                                                    ('thigh' in x) or 
+                                                    ('groin' in x) or 
+                                                    ('hamstr' in x) or 
+                                                    
+                                                    ('ligament' in x) or 
+                                                    ('bone' in x) or
+                                                    
+                                                    ## LEG
+                                                    ('leg' in x) or 
+                                                    ('band' in x) or 
+                                                    ('tibia' in x) or 
+                                                    ('fibula' in x) or 
+                                                    
+                                                    ## Knee
+                                                    ('kene' in x) or 
+                                                    ('knee' in x) or 
+                                                    ('kneecap' in x) or 
+                                                    ('meniscu' in x) or 
+                                                    ('acl' in x) or 
+                                                    ('patella' in x) or 
+                                                    ('mcl' in x) or 
+                                                    
+                                                    ## Lower Leg
+                                                    ('achil' in x) or 
+                                                    ('shin' in x) or
+                                                    ('calf' in x) or 
+                                                    
+                                                    ## Ankle
+                                                    ('ankl' in x) or 
+                                                    ('anke' in x) or 
+
+                                                    ## Foot
+                                                    ('plantar' in x) or 
+                                                    ('heel' in x) or 
+                                                    ('toe' in x) or 
+                                                    ('feet' in x) or 
+                                                    ('mid-foot' in x) or 
+                                                    ('foot' in x)
+                                                    )), :].copy()
+    
+    notes_inj_filtered = df_inj_filtered.Notes.apply(lambda x: re.sub('/', ' ', x))
+    
+    tokens_inj_filtered = notes_inj_filtered.apply(lambda x: word_tokenize(x.lower()))
+    
+    tokens_filtered = tokens_inj_filtered.apply(lambda x: filter_tokens(x))
+   
+    tokens_lemm_stem_filtered = tokens_filtered.apply(lambda x: [stemmer_porter.stem(lemmatizer.lemmatize(w)) for w in x])
+
+    df_inj_filtered['On_IL'] = tokens_lemm_stem_filtered.apply(lambda x: ('il' in x) or ('ir' in x)).astype(int)
+
+    df_inj_filtered['Inj_Type_Illness'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    (
+                                                                    ## Sick
+                                                                    ('ill' in x) or 
+                                                                    ('flu' in x) or 
+                                                                    ('flu-lik' in x) or 
+                                                                    ('viru' in x) or 
+                                                                    ('viral' in x) or 
+                                                                    ('covid-19' in x) or 
+                                                                    ('protocol' in x) or 
+                                                                    ('strep' in x) or 
+                                                                    ('cold' in x) or
+                                                                    ('bronchiti' in x) or 
+                                                                    ('gastroenter' in x) or 
+                                                                    ('respiratori' in x) or 
+                                                                    ('poison' in x)
+                                                                    )
+                                                                    ).astype(int).tolist()
+    
+    df_inj_filtered['Inj_Type_Rest'] = tokens_lemm_stem_filtered.apply(lambda x: 'rest' in x).astype(int)
+
+    df_inj_filtered['Inj_Loc_Head'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Head
+                                                                    ('headach' in x) or 
+                                                                    ('migrain' in x) or 
+                                                                    ('concuss' in x) or 
+                                                                    ('facial' in x) or 
+                                                                    ('jaw' in x) or 
+                                                                    ('throat' in x) or 
+                                                                    ('head' in x) or 
+                                                                    ('mouth' in x) or  
+                                                                    ('oral' in x) or  
+                                                                    ('tooth' in x) or 
+                                                                    ('teeth' in x) or 
+                                                                    ('dental' in x) or 
+                                                                    ('nose' in x) or 
+                                                                    ('sinu' in x) or 
+                                                                    ('eye' in x) or 
+                                                                    ('ear' in x) or 
+                                                                    ('eardrum' in x)                                                                  
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Spine'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Spine
+                                                                    ('neck' in x) or 
+                                                                    ('collarbon' in x) or 
+                                                                    ('spine' in x) or 
+                                                                    ('spinal' in x) or 
+                                                                    ('lumbar' in x) or 
+                                                                    ('disc' in x) or 
+                                                                    ('disk' in x) or 
+                                                                    ('tailbon' in x) or 
+                                                                    ('back' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Shoulder'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Shoulder
+                                                                    ('shoulder' in x) or 
+                                                                    ('cuff' in x) or 
+                                                                    ('quadricep' in x) or 
+                                                                    ('bicep' in x) or 
+                                                                    ('labrum' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Arm'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Arm
+                                                                    ('arm' in x) or 
+                                                                    ('forearm' in x) or 
+                                                                    ('elbow' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Hand'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Hand
+                                                                    ('wrist' in x) or 
+                                                                    ('thumb' in x) or 
+                                                                    ('hand' in x) or 
+                                                                    ('finger' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Chest'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Chest
+                                                                    ('pector' in x) or 
+                                                                    ('abdomin' in x) or 
+                                                                    ('chest' in x) or 
+                                                                    ('rib' in x) or 
+                                                                    ('obliqu' in x) or
+                                                                    ('appendectomi' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Heart'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Heart
+                                                                    ('heart' in x) or 
+                                                                    ('heartbeat' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Midsection'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Midsection
+                                                                    ('adductor' in x) or 
+                                                                    ('abductor' in x) or 
+                                                                    ('pelvi' in x) or 
+                                                                    ('hip' in x) or 
+                                                                    ('thigh' in x) or 
+                                                                    ('groin' in x) or 
+                                                                    ('hamstr' in x)
+                                                                    ).astype(int)
+                                                                                                                                   
+    df_inj_filtered['Inj_Loc_Leg'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## LEG
+                                                                    ('leg' in x) or 
+                                                                    ('band' in x) or 
+                                                                    ('tibia' in x) or 
+                                                                    ('fibula' in x)
+                                                                    ).astype(int)
+                                                                    
+    df_inj_filtered['Inj_Loc_Knee'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Knee
+                                                                    ('kene' in x) or 
+                                                                    ('knee' in x) or 
+                                                                    ('kneecap' in x) or 
+                                                                    ('meniscu' in x) or 
+                                                                    ('acl' in x) or 
+                                                                    ('patella' in x) or 
+                                                                    ('mcl' in x)
+                                                                    ).astype(int)
+                                                            
+    df_inj_filtered['Inj_Loc_Lower_Leg'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Lower Leg
+                                                                    ('achil' in x) or 
+                                                                    ('shin' in x) or
+                                                                    ('calf' in x)
+                                                                    ).astype(int)
+                                                                    
+    df_inj_filtered['Inj_Loc_Ankle'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Ankle
+                                                                    ('ankl' in x) or 
+                                                                    ('anke' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Loc_Foot'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                    ## Foot
+                                                                    ('plantar' in x) or 
+                                                                    ('heel' in x) or 
+                                                                    ('toe' in x) or 
+                                                                    ('feet' in x) or 
+                                                                    ('mid-foot' in x) or 
+                                                                    ('foot' in x)
+                                                                    ).astype(int)
+
+    df_inj_filtered['Inj_Type_Soft_Tissue_1'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        # Soft Tissue 1
+                                                                                        ('sore' in x) or
+                                                                                        ('tight' in x) or
+                                                                                        ('stiff' in x) or
+                                                                                        ('stretch' in x) or
+                                                                                        ('jam' in x) or
+                                                                                        ('twist' in x) or
+                                                                                        ('pull' in x)
+                                                                                        ).astype(int)
+
+    df_inj_filtered['Inj_Type_Soft_Tissue_2'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Soft Tissue 2
+                                                                                        ('sublux' in x) or
+                                                                                        ('sublex' in x) or
+                                                                                        ('sublax' in x) or
+                                                                                        ('hyperextend' in x) or
+                                                                                        ('hyper-extend' in x) or
+                                                                                        ('pointer' in x) or
+                                                                                        ('splint' in x) or
+                                                                                        ('tendin' in x) or
+                                                                                        ('spasm' in x)
+                                                                                        ).astype(int)
+
+    df_inj_filtered['Inj_Type_Dislocation'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Dislocation
+                                                                                        ('disloc' in x) or
+                                                                                        ('disloact' in x) or
+                                                                                        ('separ' in x)
+                                                                                        ).astype(int)
+
+    df_inj_filtered['Inj_Type_Concussion'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Concussion
+                                                                                        ('concuss' in x)
+                                                                                        ).astype(int)
+
+    df_inj_filtered['Inj_Type_Swell'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Swell
+                                                                                        ('bursiti' in x) or
+                                                                                        ('inflam' in x) or
+                                                                                        ('inflamm' in x) or
+                                                                                        ('swell' in x) or
+                                                                                        ('swollen' in x) or
+                                                                                        ('bruis' in x) or
+                                                                                        ('contus' in x)
+                                                                                        ).astype(int)
+
+    df_inj_filtered['Inj_Type_Sprain_Strain'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Sprain/Strain
+                                                                                        ('sprain' in x) or
+                                                                                        ('spain' in x) or
+                                                                                        ('strain' in x) or
+                                                                                        ('stain' in x)
+                                                                                        ).astype(int)
+
+    df_inj_filtered['Inj_Type_Break'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Tear/Break
+                                                                                        ('stress' in x) or
+                                                                                        ('broken' in x) or
+                                                                                        ('broke' in x) or
+                                                                                        ('fractur' in x) or
+                                                                                        ('torn' in x) or
+                                                                                        ('tear' in x) or
+                                                                                        ('ruptur' in x)
+                                                                                        ).astype(int)
+    
+    df_inj_filtered['Inj_Type_Cut'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ## Cut
+                                                                                        ('abras' in x) or
+                                                                                        ('lacer' in x) or
+                                                                                        ('cut' in x)
+                                                                                        ).astype(int)
+    
+    df_inj_filtered['Surgery'] = tokens_lemm_stem_filtered.apply(lambda x:
+                                                                                        ('appendectomi' in x) or
+                                                                                        ('hospit' in x) or ####
+                                                                                        ('surguri' in x) or
+                                                                                        ('surgeri' in x)
+                                                                                        ).astype(int)
+
+    return df_inj_filtered
 
 def get_return_dates(df):
     df_inj = df[df['Status'].eq('Injured')].copy()
-    players = df_inj['bbref_id'].unique()[:1100] ### BBRef_ID for each player array
+    players = df_inj['bbref_id'].unique() ### BBRef_ID for each player array
     return_date_df = pd.DataFrame() ### Empty DF for collecting return dates and indices
     return_date_dict = {}
+    c = 0
+    t = df_inj['bbref_id'].nunique()
     for player in players:
+        c += 1
+
         cntr = 0 ### Counter    
         player_df = df[df['bbref_id'] == player] ### Get player injury df slice
         
@@ -259,32 +697,70 @@ def get_return_dates(df):
 
                 # print("!!!")
                 # INJURY NOTES HANDLE HERE
+            elif status == 'Healed':
+                new_inj = 0
             else:
                 new_inj = 1
                 init_inj_idx = idx
                 init_inj_info = injury
                 init_inj_date = date
                 updated_init_inj = False
-                if re.fullmatch(r'(pla.*?n I\w$)', init_inj_info):
-                    # print()
-                    pass
-                    # print('!!!', prev_inj, str(prev_inj_date)[:10], str(prev_return_date)[:10])
-                    # print(idx, player, (str(date)[:10], str(return_date)[:10]), injury)
+                # if re.fullmatch(r'(pla.*?n I\w$)', init_inj_info):
+                #     pass
             ### GAME STATS
-            ## Game before injury
-            # gamelogs_df[gamelogs_df['Date'] <= date][***STAT***].
-            ## 7 days before injury
-            ## 14 days before injury
-            ## 30 days before injury
-            ## Season up to that point
-            ## Career
+            gamelog_df_pre_inj = gamelogs_df[gamelogs_df['Date'] <= date]
+            if gamelog_df_pre_inj.shape[0] > 0:
+                ## Game before injury
+                date_lst_gm, mp_lst_gm, pts_last_game, reb_lst_gm, ast_lst_gm, pm_lst_gm  = gamelog_df_pre_inj[['Date', 'MP', 'PTS', 'TRB', 'AST', '+/-']].values[-1]
+                days_lst_gm = (date_lst_gm - date).days
+                lst_gm = {'days_lst_gm':days_lst_gm, 'mp_lst_gm':mp_lst_gm, 'pts_last_game':pts_last_game, 'reb_lst_gm':reb_lst_gm, 'ast_lst_gm':ast_lst_gm, 'pm_lst_gm':pm_lst_gm}
+
+                # ga
+                ## 7 days before injury
+                glog_7d_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Date'] >= (date - np.timedelta64(7, 'D'))]
+                keys_7d = ['gms_7d', 't_mp_7d', 't_pm_7d', 'mpg_7d', 'ppg_7d', 'rpg_7d', 'apg_7d', 'pmg_7d']
+                b4_7d = {k:v for k,v in zip(keys_7d, gamelog_stats_b4_inj(glog_7d_b4))}
+
+                ## 14 days before injury
+                glog_14d_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Date'] >= (date - np.timedelta64(14, 'D'))]
+                keys_14d = ['gms_14d', 't_mp_14d', 't_pm_14d', 'mpg_14d', 'ppg_14d', 'rpg_14d', 'apg_14d', 'pmg_14d']
+
+                b4_14d = {k:v for k,v in zip(keys_14d, gamelog_stats_b4_inj(glog_14d_b4))}
+
+                ## 30 days before injury
+                glog_30d_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Date'] >= (date - np.timedelta64(30, 'D'))]
+                keys_30d = ['gms_30d', 't_mp_30d', 't_pm_30d', 'mpg_30d', 'ppg_30d', 'rpg_30d', 'apg_30d', 'pmg_30d']
+                b4_30d = {k:v for k,v in zip(keys_30d, gamelog_stats_b4_inj(glog_30d_b4))}
+
+                
+                ## Season up to that point
+                glog_szn_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Season'] == season]
+                keys_szn = ['gms_szn', 't_mp_szn', 't_pm_szn', 'mpg_szn', 'ppg_szn', 'rpg_szn', 'apg_szn', 'pmg_szn']
+                b4_szn = {k:v for k,v in zip(keys_szn, gamelog_stats_b4_inj(glog_szn_b4))}
+
+                ## Career
+                keys_career_b4 = ['gms_career_b4', 't_mp_career_b4', 't_pm_career_b4', 'mpg_career_b4', 'ppg_career_b4', 'rpg_career_b4', 'apg_career_b4', 'pmg_career_b4']
+                b4_career = {k:v for k,v in zip(keys_career_b4, gamelog_stats_b4_inj(gamelog_df_pre_inj))}
+
+                stats_b4_inj = {**lst_gm, **b4_7d, **b4_14d, **b4_30d, **b4_szn, **b4_career}
+            else:
+                stats_b4_inj = {}
             inj_duration = return_date - date
-            return_date_dict[idx] = {'Return_Date': return_date, 'Inj_Duration': inj_duration, 'New_Inj': new_inj, 'Out_of_NBA': out_of_league, 'Season_Ending':season_ending, 'Career': nba_career, 'Inj_Check':injury}
+            return_date_dict[idx] = {'Return_Date': return_date, 'Inj_Duration': inj_duration, 'New_Inj': new_inj, 'Out_of_NBA': out_of_league, 'Season_Ending':season_ending, 'Career': nba_career, 'Inj_Check':injury, **stats_b4_inj}
             prev_return_date = return_date ### Set new prev_return_date for next item in loop
-
-
+        print(c, '/', t, '-', player)
+    
     return_date_df = pd.DataFrame(return_date_dict).T.sort_index()
     return return_date_df
+
+def gamelog_stats_b4_inj(glog_b4_df):
+    if glog_b4_df.shape[0] > 0:
+        gms_b4 = glog_b4_df.shape[0]
+        t_mp_b4, t_pm_b4 = glog_b4_df[['MP', '+/-']].sum()
+        mpg_b4, ppg_b4, rpg_b4, apg_b4, pmg_b4 = glog_b4_df[['MP', 'PTS', 'TRB', 'AST', '+/-']].mean().round(2)
+    else:
+        gms_b4 = t_mp_b4 = t_pm_b4 = mpg_b4 = ppg_b4 = rpg_b4 = apg_b4 = pmg_b4 = np.nan
+    return [gms_b4, t_mp_b4, t_pm_b4, mpg_b4, ppg_b4, rpg_b4, apg_b4, pmg_b4]
 
 def get_season_column(date):
     date = pd.Timestamp(date)
@@ -293,13 +769,6 @@ def get_season_column(date):
     else:
         return date.year + 1
 
-def split_pos_col(df):
-    for pos in ['G', 'F', 'C']:
-        df['POS_'+pos] = df['pos'].str.contains(pos).astype(int)
-    ##### DROP pos????
-    return df
-
-###ADD STATS COLUMNS
 
 if __name__ == '__main__':
     # gamelogs_to_mongo(df, c_start=526)
@@ -309,9 +778,15 @@ if __name__ == '__main__':
     # pickle_inj_df(1)
     # print('1 done df0 now')
     # pickle_inj_df(0)
-    print(get_return_dates(df))
+    # print(get_return_dates(df))
+    # df = df.join(get_return_dates(df))
+    # print(df[df['New_Inj'].eq(1)&df['Status'].eq('Healed')])
     # get_return_dates(df)
-    # print(format_injury_df(df))
+    # print()
+    # df_to_pkl = get_return_dates(df)
+    df_to_pkl = format_injury_df(df)
+    print(df_to_pkl)
+    df_to_pkl.to_pickle('../data/df_inj_filtered.pkl')
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
     # print(format_injury_df(df))
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
