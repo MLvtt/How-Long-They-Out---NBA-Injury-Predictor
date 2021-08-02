@@ -1,8 +1,9 @@
 # How Long They Out? - NBA Injury Predictor
+## Introduction
 One of the major throughlines during the NBA 2020-21 Season was injuries to major players. This had me thinking about NBA injuries and inspired me to see if I could build a model that could predict how long a player would be out. The first part of this project involved an intense amount of data cleaning and feature engineering to get the dataset into a usable form to perform machine learning on.
 
-# The Data and Collection Pipeline
-## Injury Dataset
+## The Data and Collection Pipeline
+### Injury Dataset
 The injury dataset was collected from prosportstransactions.com (PST). [[dataset](http://prosportstransactions.com/basketball/Search/SearchResults.php?Player=&Team=&BeginDate=&EndDate=&ILChkBx=yes&InjuriesChkBx=yes&Submit=Search)]
 
 ![pst_page_example](img/pst_example.png) Typical Page of Injury Table from PST
@@ -24,7 +25,7 @@ The dataset contains injury information from 1947-48 season of the BAA (predeces
 
 Although the dataset begins in 1947, more than 97% of the data occurs after July 1 1994, the beginning of the league calender for the 1994-95 NBA season (see first plot in Feature Engineering). Therefore the final dataset only contains injuries after 07-01-1994.
 
-## Basketball-Reference IDs and Game Logs
+### Basketball-Reference IDs and Game Logs
 Player specific information including game logs were collected from basketball-reference.com (BBRef)
 
 Before collecting the game logs I first needed to connect the players in the injury dataset to their unique BBRef ID. I first scraped together all players BBRef IDs and the following information:
@@ -42,18 +43,17 @@ Once the BBRef IDs and player info was linked to their appropriate player in the
 
 x
 
-## Technologies Used
+### Technologies Used
 Information from both sites were scraped using the Requests and BS4 (BeautifulSoup) python libraries. The raw HTML was stored with MongoDB, then the tables and info were scraped from the HTML, converted to JSON files and again stored in MongoDB.
 
-
-# Feature Engineering
+## Feature Engineering
 As can be seen from example above the dataset scraped from PST was very raw and required an extensive amount of cleaning and feature engineering to create a usable dataset for machine learning algorithms.
 
 ![dataset](img/daily_injury_data_counts.png)Visualization of daily injuries comparison between raw dataset and cleaned final dataset of just new injuries
 
 Once the data was cleaned and 
 
-## Target: Injury Duration
+### Target: Injury Duration
 In the initial dataset, most injuries do not include return dates. The injury return dates were calculated based on using the player's game log to determine when he returned to the lineup.
 
 The injury durations were then categorized as follows:
@@ -66,7 +66,7 @@ The injury durations were then categorized as follows:
 - Season Ending: Player injured and does not play again that season until the first 10 games the following season [6% of dataset]
 - Out of the NBA: Player injured and does not play again that season and does not play in the NBA the following season for reason other than injury (i.e. retirement, playing in other leagues, and season-long suspensions) [12% of dataset]
 
-## Features from Notes Column
+### Features from Notes Column
 Using the information provided in the notes column in the injury dataset, I used 
 
 Injury locations (body parts):
@@ -98,7 +98,7 @@ Injury types, conditions and situations:
 - Dislocation [0.7% of the dataset]
 - Cut/Laceration [0.2% of the dataset]
 
-## Features from Game Logs
+### Features from Game Logs
 Collecting career game logs for each player in the dataset allowed me to include player performance information to gain insight into how the player was performing prior to their injury. Information included in the dataset:
 - Days since last game prior to injury
 - Minutes Played (MP) in last game prior to injury
@@ -112,14 +112,14 @@ Collecting career game logs for each player in the dataset allowed me to include
 - MP, PTS, REB, AST, and +/- in games of current season prior to injury
 - MP, PTS, REB, AST, and +/- in career games prior to injury
 
-## Other Features from the Injury Dataset
+### Other Features from the Injury Dataset
 Using the information provided in the injury dataset and player historical information, I was able to include the following features:
 - a
 -
 -
 
 
-# EDA
+## EDA
 Once the injury duration and injury type/status/location were categorized, I began to explore the data with respect of the injury duration categories.
 
 ![team_injuries](img/injury_cat_teams.png)
@@ -137,6 +137,6 @@ Once the injury duration and injury type/status/location were categorized, I beg
 
 #
 
-# Model Selection
+## Model Selection
 
 To be completed for capstone 3 project
