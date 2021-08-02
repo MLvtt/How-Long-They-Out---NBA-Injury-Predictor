@@ -132,13 +132,12 @@ def formatted_gamelogs_to_mongo(i_start=0):
         print(i, player, 'Added to mongo')
         i += 1
 
-
 def format_injury_df(df):
     ### Add Season Column
     df['Season'] = df['Date'].apply(lambda x: get_season_column(x))
     ### Generate return dates df and join to injury df
     # return_dates_df = get_return_dates(df)
-    return_dates_df = pd.read_pickle('../data/df_return.pkl')
+    return_dates_df = pd.read_pickle('../data/df_inj_return.pkl')
     df = df.join(return_dates_df)
     ## Comine Modern Team Names (Cannonical)
     df.loc[(df['Team'] == 'Sonics') | (df['Team'] == 'Thunder'), 'Team'] = 'Sonics/Thunder'
@@ -165,15 +164,38 @@ def format_injury_df(df):
     df['Num_Inj_Career'] = df.groupby('bbref_id')['New_Inj'].cumsum()
     ### Count of Instances of New injuries by player for season
     df['Num_Inj_Season'] = df.groupby(['bbref_id', 'Season'])['New_Inj'].cumsum()
+    ### Split Up injury Dates
+    df['Inj_Date_Day'] = df['Date'].dt.day
+    df['Inj_Date_Month'] = df['Date'].dt.month
+    df['Inj_Date_Year'] = df['Date'].dt.year
+    df['Inj_Date_DoW'] = df['Date'].dt.weekday
     ### Split POS to Dummies
     for pos in ['G', 'F', 'C']:
         df['POS_'+pos] = df['pos'].str.contains(pos).astype(int)
-
+    ### Game Log info floats
+    df['days_lst_gm'] = df['days_lst_gm'].astype(float)
+    gamelog_stats = ['mp_lst_gm', 'pts_last_game', 'reb_lst_gm', 'ast_lst_gm', 'pm_lst_gm',
+                    'gms_7d', 't_mp_7d', 't_pm_7d', 'mpg_7d', 'ppg_7d', 'rpg_7d', 'apg_7d',
+                    'pmg_7d', 'gms_14d', 't_mp_14d', 't_pm_14d', 'mpg_14d', 'ppg_14d',
+                    'rpg_14d', 'apg_14d', 'pmg_14d', 'gms_30d', 't_mp_30d', 't_pm_30d',
+                    'mpg_30d', 'ppg_30d', 'rpg_30d', 'apg_30d', 'pmg_30d', 'gms_szn',
+                    't_mp_szn', 't_pm_szn', 'mpg_szn', 'ppg_szn', 'rpg_szn', 'apg_szn',
+                    'pmg_szn', 'gms_career_b4', 't_mp_career_b4', 't_pm_career_b4',
+                    'mpg_career_b4', 'ppg_career_b4', 'rpg_career_b4', 'apg_career_b4',
+                    'pmg_career_b4']
+    df[gamelog_stats] = df[gamelog_stats].astype(float).round(2)
+    ### Teams and BBRef IDs as type category
+    df[['Team', 'bbref_id']] = df[['Team', 'bbref_id']].astype('category')
+    ### Injury Categorization
+    df = injury_categorization(df)
+    ### Categorize Injury Duration
     def injury_duration_categories(x):
         if x[1] == 1:
             return 'Out Of NBA'
         elif x[2] == 1:
             return 'Season Ending'
+        elif x[0].days < 4:
+            return 'Few Days'
         elif x[0].days < 7:
             return 'Days'
         elif x[0].days < 14:
@@ -184,10 +206,13 @@ def format_injury_df(df):
             return 'Months'
         else:
             return 'More than a year'
-    df['Inj_Duration_Cat'] = df[['Inj_Duration', 'Out_of_NBA', 'Season_Ending']].apply(lambda x: injury_duration_categories(x), axis=1).unique()
+    df['Inj_Duration_Cat'] = df[['Inj_Duration', 'Out_of_NBA', 'Season_Ending']].apply(lambda x: injury_duration_categories(x), axis=1).astype('category')
     ### Drop Columns
-    df.drop(['pos','Inj_Check'], axis=1, inplace=True)
-    df = injury_categorization(df)
+    drop_columns = ['Date', 'Status', 'Notes', 
+                    'pos', 'from', 'to', 
+                    'Return_Date', 'Inj_Check', 'Inj_Duration', 
+                    'New_Inj', 'Out_of_NBA', 'Season_Ending', 'Career']
+    df.drop(drop_columns, axis=1, inplace=True)
     return df
 
 def injury_categorization(df):
@@ -353,8 +378,6 @@ def injury_categorization(df):
     tokens_filtered = tokens_inj_filtered.apply(lambda x: filter_tokens(x))
    
     tokens_lemm_stem_filtered = tokens_filtered.apply(lambda x: [stemmer_porter.stem(lemmatizer.lemmatize(w)) for w in x])
-
-    df_inj_filtered['On_IL'] = tokens_lemm_stem_filtered.apply(lambda x: ('il' in x) or ('ir' in x)).astype(int)
 
     df_inj_filtered['Inj_Type_Illness'] = tokens_lemm_stem_filtered.apply(lambda x:
                                                                     (
@@ -584,6 +607,8 @@ def injury_categorization(df):
                                                                                         ('surgeri' in x)
                                                                                         ).astype(int)
 
+    df_inj_filtered['On_IL'] = tokens_lemm_stem_filtered.apply(lambda x: ('il' in x) or ('ir' in x)).astype(int)
+
     return df_inj_filtered
 
 def get_return_dates(df):
@@ -712,35 +737,37 @@ def get_return_dates(df):
             if gamelog_df_pre_inj.shape[0] > 0:
                 ## Game before injury
                 date_lst_gm, mp_lst_gm, pts_last_game, reb_lst_gm, ast_lst_gm, pm_lst_gm  = gamelog_df_pre_inj[['Date', 'MP', 'PTS', 'TRB', 'AST', '+/-']].values[-1]
-                days_lst_gm = (date_lst_gm - date).days
-                lst_gm = {'days_lst_gm':days_lst_gm, 'mp_lst_gm':mp_lst_gm, 'pts_last_game':pts_last_game, 'reb_lst_gm':reb_lst_gm, 'ast_lst_gm':ast_lst_gm, 'pm_lst_gm':pm_lst_gm}
+                days_lst_gm = (date - date_lst_gm).days
+                lst_gm = {'days_lst_gm':days_lst_gm, 'mp_lst_gm':float(mp_lst_gm), 
+                          'pts_last_game':float(pts_last_game), 'reb_lst_gm':float(reb_lst_gm), 
+                          'ast_lst_gm':float(ast_lst_gm), 'pm_lst_gm':float(pm_lst_gm)}
 
                 # ga
                 ## 7 days before injury
                 glog_7d_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Date'] >= (date - np.timedelta64(7, 'D'))]
                 keys_7d = ['gms_7d', 't_mp_7d', 't_pm_7d', 'mpg_7d', 'ppg_7d', 'rpg_7d', 'apg_7d', 'pmg_7d']
-                b4_7d = {k:v for k,v in zip(keys_7d, gamelog_stats_b4_inj(glog_7d_b4))}
+                b4_7d = {k:float(v) for k,v in zip(keys_7d, gamelog_stats_b4_inj(glog_7d_b4))}
 
                 ## 14 days before injury
                 glog_14d_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Date'] >= (date - np.timedelta64(14, 'D'))]
                 keys_14d = ['gms_14d', 't_mp_14d', 't_pm_14d', 'mpg_14d', 'ppg_14d', 'rpg_14d', 'apg_14d', 'pmg_14d']
 
-                b4_14d = {k:v for k,v in zip(keys_14d, gamelog_stats_b4_inj(glog_14d_b4))}
+                b4_14d = {k:float(v) for k,v in zip(keys_14d, gamelog_stats_b4_inj(glog_14d_b4))}
 
                 ## 30 days before injury
                 glog_30d_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Date'] >= (date - np.timedelta64(30, 'D'))]
                 keys_30d = ['gms_30d', 't_mp_30d', 't_pm_30d', 'mpg_30d', 'ppg_30d', 'rpg_30d', 'apg_30d', 'pmg_30d']
-                b4_30d = {k:v for k,v in zip(keys_30d, gamelog_stats_b4_inj(glog_30d_b4))}
+                b4_30d = {k:float(v) for k,v in zip(keys_30d, gamelog_stats_b4_inj(glog_30d_b4))}
 
                 
                 ## Season up to that point
                 glog_szn_b4 = gamelog_df_pre_inj[gamelog_df_pre_inj['Season'] == season]
                 keys_szn = ['gms_szn', 't_mp_szn', 't_pm_szn', 'mpg_szn', 'ppg_szn', 'rpg_szn', 'apg_szn', 'pmg_szn']
-                b4_szn = {k:v for k,v in zip(keys_szn, gamelog_stats_b4_inj(glog_szn_b4))}
+                b4_szn = {k:float(v) for k,v in zip(keys_szn, gamelog_stats_b4_inj(glog_szn_b4))}
 
                 ## Career
                 keys_career_b4 = ['gms_career_b4', 't_mp_career_b4', 't_pm_career_b4', 'mpg_career_b4', 'ppg_career_b4', 'rpg_career_b4', 'apg_career_b4', 'pmg_career_b4']
-                b4_career = {k:v for k,v in zip(keys_career_b4, gamelog_stats_b4_inj(gamelog_df_pre_inj))}
+                b4_career = {k:float(v) for k,v in zip(keys_career_b4, gamelog_stats_b4_inj(gamelog_df_pre_inj))}
 
                 stats_b4_inj = {**lst_gm, **b4_7d, **b4_14d, **b4_30d, **b4_szn, **b4_career}
             else:
@@ -786,7 +813,8 @@ if __name__ == '__main__':
     # df_to_pkl = get_return_dates(df)
     df_to_pkl = format_injury_df(df)
     print(df_to_pkl)
-    df_to_pkl.to_pickle('../data/df_inj_filtered.pkl')
+    df_to_pkl.to_pickle('../data/df_final.pkl')
+    print(df_to_pkl.info())
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
     # print(format_injury_df(df))
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])

@@ -75,7 +75,7 @@ As can be seen from example above the dataset scraped from PST was very raw and 
 ![dataset](img/daily_injury_data_counts.png)
 Visualization of daily injuries comparison between raw dataset and cleaned final dataset of just new injuries
 
-Once the data was cleaned and features engineered the final dataset included 95 Features and 21,109 rows of new injuries from 1994-95 NBA season to present.
+Once the data was cleaned and features engineered the final dataset included 89 Features and 21,109 rows of new injuries from 1994-95 NBA season to present.
 
 ### **Target: Injury Duration**
 
