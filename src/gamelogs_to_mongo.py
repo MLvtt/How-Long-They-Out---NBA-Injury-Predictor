@@ -139,7 +139,7 @@ def format_injury_df(df):
     # return_dates_df = get_return_dates(df)
     return_dates_df = pd.read_pickle('../data/df_inj_return.pkl')
     df = df.join(return_dates_df)
-    ## Comine Modern Team Names (Cannonical)
+    ## Combine Modern Team Names (Canonical)
     df.loc[(df['Team'] == 'Sonics') | (df['Team'] == 'Thunder'), 'Team'] = 'Sonics/Thunder'
     df.loc[(df['Team'] == 'Wizards') | (df['Team'] == 'Bullets'), 'Team'] = 'Bullets/Wizards'
     df.loc[((df['Team'] == 'Hornets') & (df['Date'] < '2013-08-01')) | (df['Team'] == 'Pelicans'), 'Team'] = 'Hornets/Pelicans'
@@ -202,18 +202,17 @@ def format_injury_df(df):
             return 'Week'
         elif x[0].days < 60:
             return 'Weeks'
-        elif x[0].days < 365:
-            return 'Months'
         else:
-            return 'More than a year'
+            return 'Months'
     df['Inj_Duration_Cat'] = df[['Inj_Duration', 'Out_of_NBA', 'Season_Ending']].apply(lambda x: injury_duration_categories(x), axis=1).astype('category')
     ### Drop Columns
     drop_columns = ['Date', 'Status', 'Notes', 
                     'pos', 'from', 'to', 
-                    'Return_Date', 'Inj_Check', 'Inj_Duration', 
+                    'Return_Date', 'Inj_Check', 
+                    #'Inj_Duration', 
                     'New_Inj', 'Out_of_NBA', 'Season_Ending', 'Career']
-    df.drop(drop_columns, axis=1, inplace=True)
-    return df
+    # df.drop(drop_columns, axis=1, inplace=True)
+    return df.drop(drop_columns, axis=1), df
 
 def injury_categorization(df):
     df = df[(df['Date'] >= '1994-07-01')&df['New_Inj']]
@@ -811,10 +810,11 @@ if __name__ == '__main__':
     # get_return_dates(df)
     # print()
     # df_to_pkl = get_return_dates(df)
-    df_to_pkl = format_injury_df(df)
-    print(df_to_pkl)
-    df_to_pkl.to_pickle('../data/df_final.pkl')
-    print(df_to_pkl.info())
+    df_to_pkl1, df_to_pkl2 = format_injury_df(df)
+    print(df_to_pkl1)
+    df_to_pkl1.to_pickle('../data/df_final1.pkl')
+    df_to_pkl2.to_pickle('../data/df_final2.pkl')
+    print(df_to_pkl1.info())
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
     # print(format_injury_df(df))
     # print(df[(df['Date'].dt.month < 10) & (df['Date'].dt.month > 7)]['Date'].values[0])
